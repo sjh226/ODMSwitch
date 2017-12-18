@@ -206,15 +206,15 @@ def manip(df):
 
 	df['var_dif'] = df['object_code'].map(var_dic)
 
-	df = df[(df['var_dif'] > .001) & (df['deltagas'] > .001)]
+	# df = df[(df['var_dif'] > .001) & (df['deltagas'] > .001)]
 
 	return df
 
 def get_offset(df):
-	o_df = o_df[['object_code', 'wellname', 'ec_gas', 'odm_gas', 'deltagas', 'var_dif']]
+	o_df = df[['object_code', 'wellname', 'ec_gas', 'odm_gas', 'deltagas', 'var_dif']].copy()
 	o_df.rename(columns={'object_code':'wellflac'}, inplace=True)
 	o_df = o_df.groupby(['wellflac', 'wellname'], as_index=False).sum()
-	o_df = df[df['var_dif'] < 1]
+	o_df = o_df[o_df['var_dif'] < 1]
 
 	return o_df
 
@@ -223,10 +223,25 @@ def dim_link(dims, df):
 	return linked
 
 def site_totals(df):
-	for site in df['gatheringsite'].unique():
-		print(site, ' EC: ', df[df['gatheringsite'] == site]['ec_gas'].sum(), '\n')
-		print(site, ' ODM: ', df[df['gatheringsite'] == site]['odm_gas'].sum(), '\n')
-		print('--------------------------------------------------')
+	site_diff = {}
+	site_perc = {}
+	for site in sorted(df['gatheringsite'].unique()):
+		ec = df[df['gatheringsite'] == site]['ec_gas'].sum()
+		odm = df[df['gatheringsite'] == site]['odm_gas'].sum()
+		# print(site, ' EC: ', ec)
+		# print(site, ' ODM: ', odm)
+		# print('--------------------------------------------------')
+		site_diff[site] = abs(ec - odm)
+		site_perc[site] = abs((ec-odm) / ec)
+		with open('gat_site.txt', 'a+') as text_file:
+			text_file.write('{}\nEC: {}\nODM: {}\n------------------------------------\n'.format(\
+							site, ec, odm))
+
+	print('\nAverage site difference: ', np.mean(list(site_diff.values())))
+	print('Max site difference: ', np.max(list(site_diff.values())))
+	print('----------------------------------------')
+	print('Average site percent diff: ', np.mean(list(site_perc.values())))
+	return site_diff
 
 
 if __name__ == '__main__':
@@ -243,7 +258,7 @@ if __name__ == '__main__':
 	dims = dimension_fetch()
 
 	l_df = dim_link(dims, o_df)
-	site_totals(l_df)
+	site_dic = site_totals(l_df)
 
 	# p_df = plunger_fetch(l_df)
 	# apis = l_df['api'].unique()
