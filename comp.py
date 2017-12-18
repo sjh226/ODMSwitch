@@ -71,7 +71,7 @@ def fetch():
 		INNER JOIN OperationsDataMart.Reporting.AllData AD
 			ON AD.WellFlac = W.OBJECT_Code
 			AND AD.DateKey = CAST([DAYTIME] AS DATE)
-		WHERE DateKey >= '2017-11-01'
+		WHERE DateKey >= '2017-12-01'
 		ORDER BY DateKey Desc
 	""")
 
@@ -99,14 +99,17 @@ def dimension_fetch():
 
 	SQLCommand = ("""
 		SELECT WellFlac
-              ,NetRevenueInterest
-              ,WorkingInterest
-              ,CurrentWellStatus
-              ,BusinessUnit
-              ,Asset
-              ,Area
-              ,GatheringSite
-              ,BaseOrWedge
+			  ,API
+			  ,NetRevenueInterest
+			  ,WorkingInterest
+			  ,CurrentWellStatus
+			  ,BusinessUnit
+			  ,Asset
+			  ,Area
+			  ,GatheringSite
+			  ,BaseOrWedge
+			  ,SpudDate
+			  ,FirstProductionDate
 		FROM OperationsDataMart.Dimensions.Wells
 	""")
 
@@ -124,6 +127,69 @@ def dimension_fetch():
 
 	connection.close()
 	return df
+
+def List2SQLList(items):
+	sqllist = "'{}'".format("\',\'".join(items))
+	return sqllist
+
+def plunger_fetch(df):
+	# APIs = list(df.api.unique())
+	# sql_list = List2SQLList(APIs)
+	connection = pyodbc.connect(r'DRIVER={SQL Server Native Client 11.0};'
+								r'SERVER=SQLDW-L48.BP.Com;'
+								r'trusted_connection=yes;')
+	connection.autocommit=True
+	cursor = connection.cursor()
+	SQLCommandTemp = ("""
+		SELECT DISTINCT R.well_id
+					   ,R.event_objective_1 as EventObjective
+					   ,R.date_ops_start
+					   ,MAX(DATE_OPS_START) OVER (PARTITION BY API) AS LATESTDATE
+					   ,R.event_code
+					   ,R.event_type as EventType
+					   ,R.event_objective_2
+					   ,left(k.API, 10) as API
+					   ,E.well_common_name
+					   ,K.WELLNAME
+					   ,K.ASSET
+		FROM edw.openwells.dm_event R
+		LEFT JOIN edw.openwells.cd_well E
+			ON R.well_id = E.well_id
+		LEFT JOIN OperationsDataMart.DIMENSIONS.WELLS K
+			ON LEFT(E.API_NO, 10) = K.API
+		WHERE (R.event_objective_1 LIKE '%PLUNGER%'
+			OR R.EVENT_OBJECTIVE_1 LIKE '%COMPRESSOR%'
+			OR R.EVENT_OBJECTIVE_1 LIKE '%ESP%'
+			OR R.EVENT_OBJECTIVE_1 LIKE '%GAS LIFT%'
+			OR R.EVENT_OBJECTIVE_1 LIKE '%ROD PUMP%'
+			OR R.EVENT_OBJECTIVE_1 LIKE '%COMPRESSION%'
+			OR R.EVENT_OBJECTIVE_1 LIKE '%ELECTRIC SUBMERSIBLE PUMP%')
+		""")
+	cursor.execute(SQLCommandTemp)
+	connection.commit()
+	# SQLCommandQuery = ("""SELECT DISTINCT *
+	#        , CASE WHEN EVENTOBJECTIVE LIKE '%PLUNGER%' THEN 'Plunger'
+	#              WHEN EVENTOBJECTIVE LIKE '%GAS LIFT%' THEN 'GasLift'
+	#              WHEN EVENTOBJECTIVE LIKE '%ROD PUMP%' THEN 'RodPump'
+	#              WHEN EVENTOBJECTIVE LIKE '%ELECTRIC SUBMERSIBLE PUMP%' THEN 'ESP'
+	#              WHEN EVENTOBJECTIVE LIKE '%COMPRESSION%' THEN 'Compressor'
+	#              END AS PRODUCTIONCATEGORY
+	# FROM ##INSTALLSET
+	# WHERE API IN (""" + sql_list + """)
+	# """)
+	# print(SQLCommandQuery)
+	# cursor.execute(SQLCommandQuery)
+	results = cursor.fetchall()
+
+	df_production = pd.DataFrame.from_records(results)
+
+	try:
+		df_production.columns = pd.DataFrame(np.matrix(cursor.description))[0]
+		connection.close()
+		return df_production
+	except:
+		connection.close()
+
 
 def get_var_wells(df):
 	flacs = df[df['deltagas'] > 0.0001]['object_code']
@@ -145,16 +211,22 @@ def manip(df):
 	return df
 
 def get_offset(df):
-	o_df = df[df['var_dif'] < 1]
 	o_df = o_df[['object_code', 'wellname', 'ec_gas', 'odm_gas', 'deltagas', 'var_dif']]
 	o_df.rename(columns={'object_code':'wellflac'}, inplace=True)
 	o_df = o_df.groupby(['wellflac', 'wellname'], as_index=False).sum()
+	o_df = df[df['var_dif'] < 1]
 
 	return o_df
 
 def dim_link(dims, df):
 	linked = df.merge(dims, how='left', on='wellflac')
 	return linked
+
+def site_totals(df):
+	for site in df['gatheringsite'].unique():
+		print(site, ' EC: ', df[df['gatheringsite'] == site]['ec_gas'].sum(), '\n')
+		print(site, ' ODM: ', df[df['gatheringsite'] == site]['odm_gas'].sum(), '\n')
+		print('--------------------------------------------------')
 
 
 if __name__ == '__main__':
@@ -170,4 +242,9 @@ if __name__ == '__main__':
 	o_df = pd.read_csv('data/grouped.csv')
 	dims = dimension_fetch()
 
-	l_df = dim_link(dims, o_df[o_df['deltagas'] > 100])
+	l_df = dim_link(dims, o_df)
+	site_totals(l_df)
+
+	# p_df = plunger_fetch(l_df)
+	# apis = l_df['api'].unique()
+	# df = p_df[p_df['API'].isin(apis)]
