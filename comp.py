@@ -85,7 +85,43 @@ def fetch():
 	except:
 		pass
 
-	# Close the connection after pulling the data
+	connection.close()
+	return df
+
+def dimension_fetch():
+	connection = pyodbc.connect(r'DRIVER={SQL Server Native Client 11.0};'
+								r'SERVER=SQLDW-L48.BP.Com;'
+								r'DATABASE=OperationsDataMart;'
+								r'Trusted_connection=yes;'
+								)
+
+	cursor = connection.cursor()
+
+	SQLCommand = ("""
+		SELECT WellFlac
+              ,NetRevenueInterest
+              ,WorkingInterest
+              ,CurrentWellStatus
+              ,BusinessUnit
+              ,Asset
+              ,Area
+              ,GatheringSite
+              ,BaseOrWedge
+		FROM OperationsDataMart.Dimensions.Wells
+	""")
+
+	cursor.execute(SQLCommand)
+	results = cursor.fetchall()
+	df = pd.DataFrame.from_records(results)
+
+	try:
+		df.columns = pd.DataFrame(np.matrix(cursor.description))[0]
+		df.columns = [col.lower().replace(' ', '_') for col in df.columns]
+	except:
+		pass
+
+	df['wellflac'] = df['wellflac'].astype(int)
+
 	connection.close()
 	return df
 
@@ -111,17 +147,27 @@ def manip(df):
 def get_offset(df):
 	o_df = df[df['var_dif'] < 1]
 	o_df = o_df[['object_code', 'wellname', 'ec_gas', 'odm_gas', 'deltagas', 'var_dif']]
-	o_df = o_df.groupby(['object_code', 'wellname'], as_index=False).sum()
+	o_df.rename(columns={'object_code':'wellflac'}, inplace=True)
+	o_df = o_df.groupby(['wellflac', 'wellname'], as_index=False).sum()
 
 	return o_df
 
+def dim_link(dims, df):
+	linked = df.merge(dims, how='left', on='wellflac')
+	return linked
+
 
 if __name__ == '__main__':
-	df = fetch()
-	df.to_csv('data/well_difs.csv')
-	df = pd.read_csv('data/well_difs.csv')
-	df = get_var_wells(df)
-	var_df = manip(df)
+	# df = fetch()
+	# df.to_csv('data/well_difs.csv')
+	# df = pd.read_csv('data/well_difs.csv')
+	# df = get_var_wells(df)
+	# var_df = manip(df)
+	#
+	# o_df = get_offset(var_df)
+	# o_df.to_csv('data/grouped.csv')
 
-	o_df = get_offset(var_df)
-	o_df.to_csv('data/grouped.csv')
+	o_df = pd.read_csv('data/grouped.csv')
+	dims = dimension_fetch()
+
+	l_df = dim_link(dims, o_df[o_df['deltagas'] > 100])
