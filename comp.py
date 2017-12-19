@@ -10,52 +10,6 @@ def fetch():
 								)
 
 	cursor = connection.cursor()
-	# SQLCommand = ("""
-	#     SELECT R.EVENT_OBJECTIVE_1
-	#     	  ,K.WellFlac
-	#     	  ,K.WellName
-	#     	  ,G.Diff
-	#     	  ,G.EC_Gas
-	#     	  ,G.ODM_Gas
-	#     	  ,G.Delta
-	#     FROM edw.openwells.dm_event r
-	#     left join
-	#     edw.openwells.cd_well e
-	#     on r.well_id=e.well_id
-	#     left join
-	#     OperationsDataMart.DIMENSIONS.WELLS K
-	#     ON LEFT(E.API_NO, 10)=K.API
-	#     LEFT JOIN (
-	#     	SELECT W.[OBJECT_Code]
-	#     			,COUNT(DISTINCT (PA.[ALLOC_GAS_VOL] - AD.GAS)) AS Diff
-	#     			,SUM(PA.ALLOC_GAS_VOL) AS EC_Gas
-	#     			,SUM(AD.GAS) AS ODM_Gas
-	#     			,SUM(PA.ALLOC_GAS_VOL) - SUM(AD.GAS) AS Delta
-	#     	FROM [EDW].[EC].[PWEL_DAY_ALLOC] PA
-	#     	INNER JOIN [EDW].[EC].[WELL] W
-	#     		ON W.[Object_ID] = PA.[Object_ID]
-	#     	INNER JOIN OperationsDataMart.Reporting.AllData AD
-	#     		ON AD.WellFlac = W.[OBJECT_Code]
-	#     		AND AD.DateKey = CAST([DAYTIME] AS DATE)
-	#     	WHERE AD.DateKey >= '2017-12-01'
-	#     	GROUP BY W.OBJECT_CODE
-	#     	HAVING SUM(PA.ALLOC_GAS_VOL) - SUM(AD.GAS) != 0
-	#     		AND SUM(PA.ALLOC_GAS_VOL) - SUM(AD.GAS) >= 0.1*SUM(AD.GAS)
-	#     		AND SUM(AD.GAS) != 0
-	#     	--HAVING COUNT(DISTINCT (PA.[ALLOC_GAS_VOL] - AD.GAS)) = 1
-	#     	) AS G
-	#     ON G.OBJECT_CODE = K.WellFlac
-	#     WHERE (r.event_objective_1 like '%PLUNGER%' 
-	#     	OR R.EVENT_OBJECTIVE_1 LIKE '%COMPRESSOR%' 
-	#     	OR R.EVENT_OBJECTIVE_1 LIKE '%ESP%' 
-	#     	OR R.EVENT_OBJECTIVE_1 LIKE '%GAS LIFT%' 
-	#     	OR R.EVENT_OBJECTIVE_1 LIKE '%ROD PUMP%' 
-	#     	OR R.EVENT_OBJECTIVE_1 LIKE '%COMPRESSION%' 
-	#     	OR R.EVENT_OBJECTIVE_1 LIKE '%ELECTRIC SUBMERSIBLE PUMP%')
-	#     	AND G.Diff IS NOT NULL
-	#     	AND G.Diff < 10
-	#     ORDER BY G.Delta DESC, K.WellFlac;
-	# """)
 
 	SQLCommand = ("""
 		SELECT AD.API,
@@ -86,6 +40,8 @@ def fetch():
 		pass
 
 	connection.close()
+	df.fillna(0, inplace=True)
+	df['deltagas'] = df['ec_gas'] - df['odm_gas']
 	return df
 
 def dimension_fetch():
@@ -123,7 +79,7 @@ def dimension_fetch():
 	except:
 		pass
 
-	df['wellflac'] = df['wellflac'].astype(int)
+	# df['wellflac'] = df['wellflac'].astype(int)
 
 	connection.close()
 	return df
@@ -205,8 +161,9 @@ def manip(df):
 		var_dic[flac] = abs(ec_var - odm_var)
 
 	df['var_dif'] = df['object_code'].map(var_dic)
+	df['perc'] = df['odm_gas'] / df['ec_gas']
 
-	# df = df[(df['var_dif'] > .001) & (df['deltagas'] > .001)]
+	df = df[(df['var_dif'] > .001) & (df['deltagas'] > .001)]
 
 	return df
 
@@ -218,9 +175,29 @@ def get_offset(df):
 
 	return o_df
 
+def offset_frame(df, agg_df):
+	return df[df['object_code'].isin(agg_df['object_code'].unique())]
+
 def dim_link(dims, df):
+	df['wellflac'] = df['object_code']
+	lim_dim = dims[['wellflac', 'businessunit']]
 	linked = df.merge(dims, how='left', on='wellflac')
 	return linked
+
+def bu_delta(df):
+	df['abs'] = np.abs(df['deltagas'])
+	tot = 0
+	m = 0
+	for bu in df['businessunit'].unique():
+		print(bu)
+		total = df[df['businessunit'] == bu]['deltagas'].sum()
+		tot += total
+		mis = df[df['businessunit'] == bu]['abs'].sum()
+		m += mis
+		print('Total: ', total)
+		print('Mismatched: ', mis)
+		print('------------------------')
+	print(tot, '\n', m)
 
 def site_totals(df):
 	site_diff = {}
@@ -243,22 +220,30 @@ def site_totals(df):
 	print('Average site percent diff: ', np.mean(list(site_perc.values())))
 	return site_diff
 
+def perc_diff(df):
+	for flac in df['object_code'].unique():
+		percs = df[df['object_code'] == flac]['perc'].unique()
+		if len(percs) <= 3:
+			print(flac, ' ', percs)
+
 
 if __name__ == '__main__':
-	# df = fetch()
+	df = fetch()
 	# df.to_csv('data/well_difs.csv')
 	# df = pd.read_csv('data/well_difs.csv')
 	# df = get_var_wells(df)
 	# var_df = manip(df)
-	#
+	# perc_diff(var_df)
+
 	# o_df = get_offset(var_df)
 	# o_df.to_csv('data/grouped.csv')
-
-	o_df = pd.read_csv('data/grouped.csv')
-	dims = dimension_fetch()
-
-	l_df = dim_link(dims, o_df)
-	site_dic = site_totals(l_df)
+    #
+	# o_df = pd.read_csv('data/grouped.csv')
+	# dims = dimension_fetch()
+    #
+	# l_df = dim_link(dims, df)
+	# bu_delta(l_df)
+	# site_dic = site_totals(l_df)
 
 	# p_df = plunger_fetch(l_df)
 	# apis = l_df['api'].unique()
